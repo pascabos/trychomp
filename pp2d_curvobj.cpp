@@ -30,6 +30,18 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+
+/*
+  28.10.14 pb
+   Here I present the curvature vector graphically in the GUI. You can see
+   how it grows with sharper curves.
+  04.11.14 pb
+   This implementation of the curvature objective is derivated on the extra papers
+   glued into my workbook. See the date of 03./04.11.14. It doesn't work properly,
+   so it wasn't further improved.
+*/
+
+
 /**
    \file pp2d.cpp
 
@@ -65,12 +77,15 @@ using namespace std;
 Vector xi;			// the trajectory (q_1, q_2, ...q_n)
 Vector qs;			// the start config a.k.a. q_0
 Vector qe;			// the end config a.k.a. q_(n+1)
+Vector qfix;        // zero velocity and acceleration points for the start and endpoint
+Vector curvature;   // curvature vector a.k.a kappa
 static size_t const nq (20);	// number of q stacked into xi
 static size_t const cdim (2);	// dimension of config space
 static size_t const xidim (nq * cdim); // dimension of trajectory, xidim = nq * cdim
 static double const dt (1.0);	       // time step
 static double const eta (100.0); // >= 1, regularization factor for gradient descent
 static double const lambda (1.0); // weight of smoothness objective
+static double const omega (1.0); // weight of smoothness objective
 
 //////////////////////////////////////////////////
 // gradient descent etc
@@ -174,9 +189,12 @@ static void init_chomp ()
 {
   qs.resize (cdim);
   qs << -5.0, -5.0;
-  xi = Vector::Zero (xidim);
   qe.resize (cdim);
   qe << 7.0, 7.0;
+  xi = Vector::Zero (xidim);
+  curvature = Vector::Zero (xidim);
+  qfix.resize (cdim);
+  qfix << 0.0, 0.0;
 
   repulsor.point_ << 3.0, 0.0;
 
@@ -253,15 +271,25 @@ static void cb_idle ()
   Vector const & xidd (nabla_smooth); // indeed, it is the same in this formulation...
 
   Vector nabla_obs (Vector::Zero (xidim));
+  curvature = Vector::Zero (xidim);         // important to set it zero here! if done in init_chomp(), values could be saved where no curvature is anymore
+  Vector velocity (Vector::Zero (xidim));
   for (size_t iq (0); iq < nq; ++iq) {
+
+    // Position
     Vector const qq (xi.block (iq * cdim, 0, cdim, 1));
+
+    // Velocity
     Vector qd;
-    if (iq == nq - 1) {
-      qd = qe - xi.block (iq * cdim, 0, cdim, 1);
+    if (iq == 0) {
+        qd = (xi.block ((iq+1) * cdim, 0, cdim, 1) - qs) / (2*dt);
+    }
+    else if (iq == nq - 1) {
+      qd = (qe - xi.block ((iq-1) * cdim, 0, cdim, 1)) / (2*dt);
     }
     else {
-      qd = xi.block ((iq+1) * cdim, 0, cdim, 1) - xi.block (iq * cdim, 0, cdim, 1);
+      qd = (xi.block ((iq+1) * cdim, 0, cdim, 1) - xi.block ((iq-1) * cdim, 0, cdim, 1)) / (2*dt);
     }
+    velocity.block (iq * cdim, 0, cdim, 1) = qd;
 
     // In this case, C and W are the same, Jacobian is identity.  We
     // still write more or less the full-fledged CHOMP expressions
@@ -279,20 +307,106 @@ static void cb_idle ()
     Vector const xdd (JJ * xidd.block (iq * cdim, 0, cdim , 1));
     Matrix const prj (Matrix::Identity (2, 2) - xdn * xdn.transpose()); // hardcoded planar case
     Vector const kappa (prj * xdd / pow (vel, 2.0));
+
+    // obstacle objective calculations
     Vector delta (xx - repulsor.point_);
     double const dist (delta.norm());
     static double const maxdist (4.0); // hardcoded param
-    if ((dist >= maxdist) || (dist < 1e-9)) {
-      continue;
-    }
     static double const gain (10.0); // hardcoded param
-    double const cost (gain * maxdist * pow (1.0 - dist / maxdist, 3.0) / 3.0); // hardcoded param
-    delta *= - gain * pow (1.0 - dist / maxdist, 2.0) / dist; // hardcoded param
-    nabla_obs.block (iq * cdim, 0, cdim, 1) += JJ.transpose() * vel * (prj * delta - cost * kappa);
+    if ((dist <= maxdist) && (dist > 1e-9)) {
+      double const cost (gain * maxdist * pow (1.0 - dist / maxdist, 3.0) / 3.0); // hardcoded param
+      delta *= - gain * pow (1.0 - dist / maxdist, 2.0) / dist; // hardcoded param
+      nabla_obs.block (iq * cdim, 0, cdim, 1) += JJ.transpose() * vel * (prj * delta - cost * kappa);
+    }
+    curvature.block (iq * cdim, 0, cdim, 1) = kappa;
   }
 
-  Vector dxi (Ainv * (nabla_obs + lambda * nabla_smooth));
+  // Acceleration
+  Vector acceleration (Vector::Zero (xidim));
+//  for (size_t iq (0); iq < nq; ++iq) {
+//    Vector qdd (2);
+//    if (iq == 0) {
+//      qdd = (velocity.block ((iq+1) * cdim, 0, cdim, 1) - qfix) / (2*dt);
+//    }
+//    else if (iq == nq - 1) {
+//      qdd = (qfix - velocity.block ((iq-1) * cdim, 0, cdim, 1)) / (2*dt);
+//    }
+//    else {
+//      qdd = (velocity.block ((iq+1) * cdim, 0, cdim, 1) - velocity.block ((iq-1) * cdim, 0, cdim, 1)) / (2*dt);
+//    }
+//    acceleration.block (iq * cdim, 0, cdim, 1) = qdd;
+//  }
+    acceleration = xidd;
+//    for (size_t iq (0); iq < nq; ++iq) {
+//      Vector qdd (2);
+//      if (iq == nq - 1) {
+//        qdd = (qfix - velocity.block ((iq) * cdim, 0, cdim, 1)) / (dt);
+//      }
+//      else {
+//        qdd = (velocity.block ((iq+1) * cdim, 0, cdim, 1) - velocity.block ((iq) * cdim, 0, cdim, 1)) / (dt);
+//      }
+//      acceleration.block (iq * cdim, 0, cdim, 1) = qdd;
+//    }
+
+  // Jerk
+  Vector jerk (Vector::Zero (xidim));
+  for (size_t iq (0); iq < nq; ++iq) {
+    Vector qddd (2);
+    if (iq == 0) {
+      qddd = (acceleration.block ((iq+1) * cdim, 0, cdim, 1) - qfix) / (2*dt);
+    }
+    else if (iq == nq - 1) {
+      qddd = (qfix - acceleration.block ((iq-1) * cdim, 0, cdim, 1)) / (2*dt);
+    }
+    else {
+      qddd = (acceleration.block ((iq+1) * cdim, 0, cdim, 1) - acceleration.block ((iq-1) * cdim, 0, cdim, 1)) / (2*dt);
+    }
+    jerk.block (iq * cdim, 0, cdim, 1) = qddd;
+  }
+
+  // calculation of nabla_curv
+  Vector nabla_curv (Vector::Zero (xidim));
+  for (size_t iq (0); iq < nq; ++iq) {
+    Vector kappa (2);
+    kappa = curvature.block (iq * cdim, 0, cdim, 1);
+    double const length (kappa.norm());
+    static double const maxlength (0.01);
+
+    // cost function
+    double cost (0.0);
+    if (length >= maxlength) {
+      cost = (1/(2*maxlength)) * pow (length - maxlength, 2.0);
+    }
+    else {
+      cost = 0.0;
+    }
+      // define the gradient cost function
+    double nabla_cost = 0.0;
+    if (length >= maxlength) {
+      nabla_cost = (1/maxlength) * (length-maxlength);
+    }
+    else {
+      nabla_cost = 0.0;
+    }
+
+    // gradient of kappa
+    double const vel ((velocity.block(iq * cdim, 0, cdim, 1)).norm());
+    Matrix const prj (Matrix::Identity (2, 2) - velocity.block (iq * cdim, 0, cdim, 1) * (velocity.block(iq * cdim, 0, cdim, 1)).transpose());
+    Matrix const accvel (acceleration.block (iq * cdim, 0, cdim, 1) * (velocity.block(iq * cdim, 0, cdim, 1)).transpose() + velocity.block(iq * cdim, 0, cdim, 1) * (acceleration.block(iq * cdim, 0, cdim, 1)).transpose());
+    Vector const firstp (accvel * acceleration.block(iq * cdim, 0, cdim, 1) / pow (vel, 3));
+    Vector const secondp (prj * jerk.block(iq * cdim, 0, cdim, 1) / vel);
+    Vector const nabla_kappa (firstp + secondp);
+    nabla_curv.block (iq * cdim, 0, cdim, 1) += (nabla_cost * kappa + cost * nabla_kappa);
+  }
+
+
+  Vector dxi (Ainv * (nabla_obs + lambda * nabla_smooth + omega * nabla_curv));
   xi -= dxi / eta;
+
+  curvature *= 150;         // for visualization the curvature vector is multiplied by a factor
+  //cout << endl << "curvature" << endl << curvature << endl;
+  //cout << endl << "jerk" << endl << jerk << endl;
+  cout << endl << "nabla_curv" << endl << nabla_curv << endl;
 
   // end of "the" CHOMP iteration
   //////////////////////////////////////////////////
@@ -345,6 +459,19 @@ static void cb_draw ()
     gfx::draw_line (xi[(ii-1) * cdim], xi[(ii-1) * cdim + 1], xi[ii * cdim], xi[ii * cdim + 1]);
   }
   gfx::draw_line (xi[(nq-1) * cdim], xi[(nq-1) * cdim + 1], qe[0], qe[1]);
+
+  gfx::set_pen (1.0, 0.1, 0.4, 0.5, 1.0);
+  for (size_t ii (0); ii < nq; ++ii) {          // drawing the curvature vector in x direction
+      gfx::draw_line (xi[(ii) * cdim], xi[(ii*cdim) + 1], xi[(ii) * cdim] + curvature[ii * cdim], xi[(ii*cdim) + 1]);
+  }
+  gfx::set_pen (1.0, 0.3, 0.6, 0.3, 1.0);
+  for (size_t ii (0); ii < nq; ++ii) {          // drawing the curvature vector in y direction
+      gfx::draw_line (xi[(ii) * cdim], xi[(ii)*cdim + 1], xi[(ii) * cdim], xi[(ii*cdim) + 1] + curvature[(ii*cdim) + 1]);
+  }
+  gfx::set_pen (2.5, 0.6, 0.2, 0.2, 1.0);
+  for (size_t ii (0); ii < nq; ++ii) {          // drawing the curvature vector in y direction
+      gfx::draw_line (xi[(ii) * cdim], xi[(ii)*cdim + 1], xi[(ii) * cdim] + curvature[ii * cdim], xi[(ii*cdim) + 1] + curvature[(ii*cdim) + 1]);
+  }
 
   gfx::set_pen (5.0, 0.8, 0.2, 0.2, 1.0);
   gfx::draw_point (qs[0], qs[1]);

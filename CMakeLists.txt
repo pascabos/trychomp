@@ -95,9 +95,40 @@ else (GTK2_FOUND)
 endif (GTK2_FOUND)
 
 ##################################################
+# the files added here are in order of implementation!
 
 add_executable (pp2d pp2d.cpp gfx.cpp)
 target_link_libraries (pp2d ${GTK2_LIBRARIES})
 
-add_executable (pprrr2d pprrr2d.cpp gfx.cpp)
-target_link_libraries (pprrr2d ${GTK2_LIBRARIES})
+#add_executable (pp2d_unitvecint pp2d_unitvecint.cpp gfx.cpp)
+#target_link_libraries (pp2d_unitvecint ${GTK2_LIBRARIES})
+
+#add_executable (pp2d_obs2int pp2d_obs2int.cpp gfx.cpp)
+#target_link_libraries (pp2d_obs2int ${GTK2_LIBRARIES})
+
+#add_executable (pp2d_obs2int_wpapercostfct pp2d_obs2int_wpapercostfct.cpp gfx.cpp)
+#target_link_libraries (pp2d_obs2int_wpapercostfct ${GTK2_LIBRARIES})
+
+#add_executable (pp2d_2obs_sepobj pp2d_2obs_sepobj.cpp gfx.cpp)
+#target_link_libraries (pp2d_2obs_sepobj ${GTK2_LIBRARIES})
+
+#add_executable (pp2d_2obs_oneobj pp2d_2obs_oneobj.cpp gfx.cpp)
+#target_link_libraries (pp2d_2obs_oneobj ${GTK2_LIBRARIES})
+
+#add_executable (pp2d_movpoi pp2d_movpoi.cpp gfx.cpp)
+#target_link_libraries (pp2d_movpoi ${GTK2_LIBRARIES})
+
+add_executable (pp2d_curvdisp pp2d_curvdisp.cpp gfx.cpp)
+target_link_libraries (pp2d_curvdisp ${GTK2_LIBRARIES})
+
+add_executable (pp2d_curvobj pp2d_curvobj.cpp gfx.cpp)
+target_link_libraries (pp2d_curvobj ${GTK2_LIBRARIES})
+
+add_executable (pp2d_curvobj_new pp2d_curvobj_new.cpp gfx.cpp)
+target_link_libraries (pp2d_curvobj_new ${GTK2_LIBRARIES})
+
+add_executable (pp2d2R_test pp2d2R_test.cpp gfx.cpp)
+target_link_libraries (pp2d2R_test ${GTK2_LIBRARIES})
+
+#add_executable (pprrr2d pprrr2d.cpp gfx.cpp)
+#target_link_libraries (pprrr2d ${GTK2_LIBRARIES})

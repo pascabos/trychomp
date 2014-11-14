@@ -30,6 +30,18 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+
+/*
+  28.10.14 pb
+   Here I present the curvature vector graphically in the GUI. You can see
+   how it grows with sharper curves.
+  14.11.14 pb
+   Here the new version of the curvature objective is tried out. The curvature
+   matrix AC and vector bc is implemented first. Then the derivation of nabla
+   curvature is done identically to nabla smoothness.
+*/
+
+
 /**
    \file pp2d.cpp
 
@@ -65,12 +77,15 @@ using namespace std;
 Vector xi;			// the trajectory (q_1, q_2, ...q_n)
 Vector qs;			// the start config a.k.a. q_0
 Vector qe;			// the end config a.k.a. q_(n+1)
+Vector qfix;        // zero velocity and acceleration points for the start and endpoint
+Vector curvature;   // curvature vector a.k.a kappa
 static size_t const nq (20);	// number of q stacked into xi
 static size_t const cdim (2);	// dimension of config space
 static size_t const xidim (nq * cdim); // dimension of trajectory, xidim = nq * cdim
 static double const dt (1.0);	       // time step
 static double const eta (100.0); // >= 1, regularization factor for gradient descent
 static double const lambda (1.0); // weight of smoothness objective
+static double const omega (0.5); // weight of curvature objective
 
 //////////////////////////////////////////////////
 // gradient descent etc
@@ -78,6 +93,9 @@ static double const lambda (1.0); // weight of smoothness objective
 Matrix AA;			// metric
 Vector bb;			// acceleration bias for start and end config
 Matrix Ainv;			// inverse of AA
+Matrix AC;			// matrix for the curvature objective
+Vector bc;          // vector for the curvature objective
+Matrix ACinv;			// inverse of AC
 
 //////////////////////////////////////////////////
 // gui stuff
@@ -174,9 +192,12 @@ static void init_chomp ()
 {
   qs.resize (cdim);
   qs << -5.0, -5.0;
-  xi = Vector::Zero (xidim);
   qe.resize (cdim);
   qe << 7.0, 7.0;
+  xi = Vector::Zero (xidim);
+  curvature = Vector::Zero (xidim);
+  qfix.resize (cdim);
+  qfix << 0.0, 0.0;
 
   repulsor.point_ << 3.0, 0.0;
 
@@ -184,6 +205,7 @@ static void init_chomp ()
   //      << "\nxi\n" << xi
   //      << "\nqe\n" << qe << "\n\n";
 
+  // Matrix AA and vector bb for the smoothness objective
   AA = Matrix::Zero (xidim, xidim);
   for (size_t ii(0); ii < nq; ++ii) {
     AA.block (cdim * ii, cdim * ii, cdim , cdim) = 2.0 * Matrix::Identity (cdim, cdim);
@@ -208,6 +230,33 @@ static void init_chomp ()
   // cout << "AA\n" << AA
   //      << "\nAinv\n" << Ainv
   //      << "\nbb\n" << bb << "\n\n";
+
+  // Matrix AC and vector bc for the curvature objective
+  AC = Matrix::Zero (xidim, xidim);
+  for (size_t ii(0); ii < nq; ++ii) {
+    if ((ii == 0) || (ii == nq-1)) {
+      AC.block (cdim * ii, cdim * ii, cdim , cdim) = 5.0 * Matrix::Identity (cdim, cdim);
+    }
+    AC.block (cdim * ii, cdim * ii, cdim , cdim) = 6.0 * Matrix::Identity (cdim, cdim);
+    if (ii > 0) {
+      AC.block (cdim * (ii-1), cdim * ii, cdim , cdim) = -4.0 * Matrix::Identity (cdim, cdim);
+      AC.block (cdim * ii, cdim * (ii-1), cdim , cdim) = -4.0 * Matrix::Identity (cdim, cdim);
+    }
+    if (ii > 1) {
+      AC.block (cdim * (ii-2), cdim * ii, cdim , cdim) = 1.0 * Matrix::Identity (cdim, cdim);
+      AC.block (cdim * ii, cdim * (ii-2), cdim , cdim) = 1.0 * Matrix::Identity (cdim, cdim);
+    }
+  }
+  AC /= pow (dt, 4) * (nq + 1);
+
+  ACinv = AC.inverse();
+
+  bc = Vector::Zero (xidim);
+  bc.block (0,            0, cdim, 1) = -4.0 * qs;
+  bc.block (1.0 * cdim,            0, cdim, 1) = 2.0 * qs;
+  bc.block (xidim - 2.0 * cdim, 0, cdim, 1) = 2.0 * qe;
+  bc.block (xidim - cdim, 0, cdim, 1) = -4.0 * qe;
+  bc /= 2 * pow (dt, 4) * (nq + 1);
 }
 
 
@@ -252,15 +301,25 @@ static void cb_idle ()
   Vector nabla_smooth (AA * xi + bb);
   Vector const & xidd (nabla_smooth); // indeed, it is the same in this formulation...
 
+  Vector nabla_curv (AC * xi + bc);
+
   Vector nabla_obs (Vector::Zero (xidim));
+  curvature = Vector::Zero (xidim);         // important to set it zero here! if done in init_chomp(), values could be saved where no curvature is anymore
   for (size_t iq (0); iq < nq; ++iq) {
+
+    // Position
     Vector const qq (xi.block (iq * cdim, 0, cdim, 1));
+
+    // Velocity
     Vector qd;
-    if (iq == nq - 1) {
-      qd = qe - xi.block (iq * cdim, 0, cdim, 1);
+    if (iq == 0) {
+        qd = (xi.block ((iq+1) * cdim, 0, cdim, 1) - qs) / (2*dt);
+    }
+    else if (iq == nq - 1) {
+      qd = (qe - xi.block ((iq-1) * cdim, 0, cdim, 1)) / (2*dt);
     }
     else {
-      qd = xi.block ((iq+1) * cdim, 0, cdim, 1) - xi.block (iq * cdim, 0, cdim, 1);
+      qd = (xi.block ((iq+1) * cdim, 0, cdim, 1) - xi.block ((iq-1) * cdim, 0, cdim, 1)) / (2*dt);
     }
 
     // In this case, C and W are the same, Jacobian is identity.  We
@@ -279,20 +338,27 @@ static void cb_idle ()
     Vector const xdd (JJ * xidd.block (iq * cdim, 0, cdim , 1));
     Matrix const prj (Matrix::Identity (2, 2) - xdn * xdn.transpose()); // hardcoded planar case
     Vector const kappa (prj * xdd / pow (vel, 2.0));
+
+    // obstacle objective calculations
     Vector delta (xx - repulsor.point_);
     double const dist (delta.norm());
     static double const maxdist (4.0); // hardcoded param
-    if ((dist >= maxdist) || (dist < 1e-9)) {
-      continue;
-    }
     static double const gain (10.0); // hardcoded param
-    double const cost (gain * maxdist * pow (1.0 - dist / maxdist, 3.0) / 3.0); // hardcoded param
-    delta *= - gain * pow (1.0 - dist / maxdist, 2.0) / dist; // hardcoded param
-    nabla_obs.block (iq * cdim, 0, cdim, 1) += JJ.transpose() * vel * (prj * delta - cost * kappa);
+    if ((dist <= maxdist) && (dist > 1e-9)) {
+      double const cost (gain * maxdist * pow (1.0 - dist / maxdist, 3.0) / 3.0); // hardcoded param
+      delta *= - gain * pow (1.0 - dist / maxdist, 2.0) / dist; // hardcoded param
+      nabla_obs.block (iq * cdim, 0, cdim, 1) += JJ.transpose() * vel * (prj * delta - cost * kappa);
+    }
+    curvature.block (iq * cdim, 0, cdim, 1) = kappa;
   }
 
-  Vector dxi (Ainv * (nabla_obs + lambda * nabla_smooth));
+
+  Vector dxi (Ainv * (nabla_obs + lambda * nabla_smooth + omega * nabla_curv));
   xi -= dxi / eta;
+
+  curvature *= 150;         // for visualization the curvature vector is multiplied by a factor
+  cout << endl << "nabla_smooth" << endl << nabla_smooth << endl;
+  cout << endl << "nabla_curv" << endl << nabla_curv << endl;
 
   // end of "the" CHOMP iteration
   //////////////////////////////////////////////////
@@ -345,6 +411,19 @@ static void cb_draw ()
     gfx::draw_line (xi[(ii-1) * cdim], xi[(ii-1) * cdim + 1], xi[ii * cdim], xi[ii * cdim + 1]);
   }
   gfx::draw_line (xi[(nq-1) * cdim], xi[(nq-1) * cdim + 1], qe[0], qe[1]);
+
+  gfx::set_pen (1.0, 0.1, 0.4, 0.5, 1.0);
+  for (size_t ii (0); ii < nq; ++ii) {          // drawing the curvature vector in x direction
+      gfx::draw_line (xi[(ii) * cdim], xi[(ii*cdim) + 1], xi[(ii) * cdim] + curvature[ii * cdim], xi[(ii*cdim) + 1]);
+  }
+  gfx::set_pen (1.0, 0.3, 0.6, 0.3, 1.0);
+  for (size_t ii (0); ii < nq; ++ii) {          // drawing the curvature vector in y direction
+      gfx::draw_line (xi[(ii) * cdim], xi[(ii)*cdim + 1], xi[(ii) * cdim], xi[(ii*cdim) + 1] + curvature[(ii*cdim) + 1]);
+  }
+  gfx::set_pen (2.5, 0.6, 0.2, 0.2, 1.0);
+  for (size_t ii (0); ii < nq; ++ii) {          // drawing the curvature vector in y direction
+      gfx::draw_line (xi[(ii) * cdim], xi[(ii)*cdim + 1], xi[(ii) * cdim] + curvature[ii * cdim], xi[(ii*cdim) + 1] + curvature[(ii*cdim) + 1]);
+  }
 
   gfx::set_pen (5.0, 0.8, 0.2, 0.2, 1.0);
   gfx::draw_point (qs[0], qs[1]);
@@ -407,3 +486,4 @@ int main()
   gfx::add_button ("run", cb_run);
   gfx::main ("chomp", cb_idle, cb_draw, cb_mouse);
 }
+
