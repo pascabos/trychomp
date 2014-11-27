@@ -30,22 +30,15 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 /*
-  28.10.14 pb
-   Here I present the curvature vector graphically in the GUI. You can see
-   how it grows with sharper curves.
-  04.11.14 pb
-   This implementation of the curvature objective is derivated on the extra papers
-   glued into my workbook. See the date of 03./04.11.14. It doesn't work properly,
-   so it wasn't further improved.
-  24.11.14 pb
-   Inside the CHOMP iteration I implement the curvature objective. This is the second
-   time I try it the way taking the partial derivatives of the discretized waypoints
-   in x- and y-direction. The first try on the extra sheet from 17.11.14 is replaced
-   with the velocity formulation of Roland.
+  31.10.14 pb
+  Here I try as a first possibility to push the curvature to adjacent trajectory
+  points if the length is too big. The goal is to obtain a bigger curve if the
+  circumnavigation is too sharp. As the curvature at the edge of the curve is
+  increased, the smoothness objective should flatten out the trajectory in the
+  middle of the curve.
+  So far there is a mistake and it is not working properly.
 */
-
 
 /**
    \file pp2d.cpp
@@ -82,15 +75,15 @@ using namespace std;
 Vector xi;			// the trajectory (q_1, q_2, ...q_n)
 Vector qs;			// the start config a.k.a. q_0
 Vector qe;			// the end config a.k.a. q_(n+1)
-Vector qfix;        // zero velocity and acceleration points for the start and endpoint
 Vector curvature;   // curvature vector a.k.a kappa
+Vector curv_strength;       // the length curvature vector of every trajectory point
 static size_t const nq (20);	// number of q stacked into xi
 static size_t const cdim (2);	// dimension of config space
 static size_t const xidim (nq * cdim); // dimension of trajectory, xidim = nq * cdim
 static double const dt (1.0);	       // time step
 static double const eta (100.0); // >= 1, regularization factor for gradient descent
 static double const lambda (1.0); // weight of smoothness objective
-static double const omega (1.0); // weight of smoothness objective
+static double const nu (1.0);     // weight of curvature objective
 
 //////////////////////////////////////////////////
 // gradient descent etc
@@ -193,15 +186,13 @@ static void update_robots ()
 static void init_chomp ()
 {
   qs.resize (cdim);
-  qs << -5.0, -5.0;
+  qs << -7.0, -7.0;
   qe.resize (cdim);
   qe << 7.0, 7.0;
   xi = Vector::Zero (xidim);
   curvature = Vector::Zero (xidim);
-  qfix.resize (cdim);
-  qfix << 0.0, 0.0;
 
-  repulsor.point_ << 3.0, 0.0;
+  repulsor.point_ << 0.5, 0.0;
 
   // cout << "qs\n" << qs
   //      << "\nxi\n" << xi
@@ -224,7 +215,7 @@ static void init_chomp ()
 
   // not needed anyhow
   // double cc (double (qs.transpose() * qs) + double (qe.transpose() * qe));
-  // cc /= dt * dt * (nq + 1);
+  // cc /= dt * dt * (nq + 1);const
 
   Ainv = AA.inverse();
 
@@ -276,15 +267,13 @@ static void cb_idle ()
   Vector const & xidd (nabla_smooth); // indeed, it is the same in this formulation...
 
   Vector nabla_obs (Vector::Zero (xidim));
+  Vector nabla_curv (Vector::Zero (xidim));
+  Vector detector (Vector::Zero(nq));
+  static double const minradius (100.0);
   curvature = Vector::Zero (xidim);         // important to set it zero here! if done in init_chomp(), values could be saved where no curvature is anymore
-  Vector velocity (Vector::Zero (xidim));
-  Vector kappa_l (Vector::Zero (nq));
+  curv_strength = Vector::Zero (nq);
   for (size_t iq (0); iq < nq; ++iq) {
-
-    // Position
     Vector const qq (xi.block (iq * cdim, 0, cdim, 1));
-
-    // Velocity
     Vector qd;
     if (iq == 0) {
         qd = (xi.block ((iq+1) * cdim, 0, cdim, 1) - qs) / (2*dt);
@@ -295,7 +284,6 @@ static void cb_idle ()
     else {
       qd = (xi.block ((iq+1) * cdim, 0, cdim, 1) - xi.block ((iq-1) * cdim, 0, cdim, 1)) / (2*dt);
     }
-    velocity.block (iq * cdim, 0, cdim, 1) = qd;
 
     // In this case, C and W are the same, Jacobian is identity.  We
     // still write more or less the full-fledged CHOMP expressions
@@ -313,8 +301,26 @@ static void cb_idle ()
     Vector const xdd (JJ * xidd.block (iq * cdim, 0, cdim , 1));
     Matrix const prj (Matrix::Identity (2, 2) - xdn * xdn.transpose()); // hardcoded planar case
     Vector const kappa (prj * xdd / pow (vel, 2.0));
+//    double curv_length (kappa.norm());
+//    curv_length *= 500;
 
-    // obstacle objective calculations
+//    // curcvature objective
+//    static double const minlength (1.0);
+//    static double const gain_c (0.10);
+//    if (curv_length > minlength) {
+//      double const cost_c (gain_c * minlength * pow (1.0 - curv_length / minlength, 3.0) / 3.0); // same cost function taken as used in nabla_obs
+//      nabla_curv.block (iq * cdim, 0, cdim, 1) = cost_c * kappa;
+//    }
+
+///////////////////////////////////////
+// New try for nabla_curv, 31.10.14 pb
+
+    double const curv_length (kappa.norm());
+    double const radius = 1 / curv_length;
+    if (radius < minradius) {
+        detector[iq] = 1.0;
+    }
+
     Vector delta (xx - repulsor.point_);
     double const dist (delta.norm());
     static double const maxdist (4.0); // hardcoded param
@@ -325,162 +331,26 @@ static void cb_idle ()
       nabla_obs.block (iq * cdim, 0, cdim, 1) += JJ.transpose() * vel * (prj * delta - cost * kappa);
     }
     curvature.block (iq * cdim, 0, cdim, 1) = kappa;
-    kappa_l(iq) = kappa.norm();
+//    curv_strength[iq] = radius;
   }
 
-  // Acceleration
-  Vector acceleration (Vector::Zero (xidim));
-//  for (size_t iq (0); iq < nq; ++iq) {
-//    Vector qdd (2);
-//    if (iq == 0) {
-//      qdd = (velocity.block ((iq+1) * cdim, 0, cdim, 1) - qfix) / (2*dt);
-//    }
-//    else if (iq == nq - 1) {
-//      qdd = (qfix - velocity.block ((iq-1) * cdim, 0, cdim, 1)) / (2*dt);
-//    }
-//    else {
-//      qdd = (velocity.block ((iq+1) * cdim, 0, cdim, 1) - velocity.block ((iq-1) * cdim, 0, cdim, 1)) / (2*dt);
-//    }
-//    acceleration.block (iq * cdim, 0, cdim, 1) = qdd;
-//  }
-    acceleration = xidd;
-
-  // Jerk
-  Vector jerk (Vector::Zero (xidim));
-  for (size_t iq (0); iq < nq; ++iq) {
-    Vector qddd (2);
-    if (iq == 0) {
-      qddd = (acceleration.block ((iq+1) * cdim, 0, cdim, 1) - qfix) / (2*dt);
-    }
-    else if (iq == nq - 1) {
-      qddd = (qfix - acceleration.block ((iq-1) * cdim, 0, cdim, 1)) / (2*dt);
-    }
-    else {
-      qddd = (acceleration.block ((iq+1) * cdim, 0, cdim, 1) - acceleration.block ((iq-1) * cdim, 0, cdim, 1)) / (2*dt);
-    }
-    jerk.block (iq * cdim, 0, cdim, 1) = qddd;
+  for (size_t iq (1); iq < nq; ++iq) {
+      double const kappa_max = sqrt(2) / minradius;
+      if (detector[iq] == 1.0 && detector[iq - 1] == 0) {
+          nabla_curv.block ((iq - 1) * cdim, 0, cdim, 1) << kappa_max, kappa_max;
+      }
+      else if (detector[iq] == 1.0 && detector[iq + 1] == 0) {
+          nabla_curv.block ((iq + 1) * cdim, 0, cdim, 1) << kappa_max, kappa_max;
+      }
   }
+  nabla_curv *= 100;
 
-  // calculation of nabla_curv
-  Vector nabla_curvature (Vector::Zero (xidim));
-  for (size_t iq (0); iq < nq; ++iq) {
-    Vector kappa (2);
-    kappa = curvature.block (iq * cdim, 0, cdim, 1);
-    double const length (kappa.norm());
-    static double const maxlength (0.01);
-
-    // cost function
-    double cost (0.0);
-    if (length >= maxlength) {
-      cost = (1/(2*maxlength)) * pow (length - maxlength, 2.0);
-    }
-    else {
-      cost = 0.0;
-    }
-      // define the gradient cost function
-    double nabla_cost = 0.0;
-    if (length >= maxlength) {
-      nabla_cost = (1/maxlength) * (length-maxlength);
-    }
-    else {
-      nabla_cost = 0.0;
-    }
-
-    // gradient of kappa
-    double const vel ((velocity.block(iq * cdim, 0, cdim, 1)).norm());
-    Matrix const prj (Matrix::Identity (2, 2) - velocity.block (iq * cdim, 0, cdim, 1) * (velocity.block(iq * cdim, 0, cdim, 1)).transpose());
-    Matrix const accvel (acceleration.block (iq * cdim, 0, cdim, 1) * (velocity.block(iq * cdim, 0, cdim, 1)).transpose() + velocity.block(iq * cdim, 0, cdim, 1) * (acceleration.block(iq * cdim, 0, cdim, 1)).transpose());
-    Vector const firstp (accvel * acceleration.block(iq * cdim, 0, cdim, 1) / pow (vel, 3));
-    Vector const secondp (prj * jerk.block(iq * cdim, 0, cdim, 1) / vel);
-    Vector const nabla_kappa (firstp + secondp);
-    nabla_curvature.block (iq * cdim, 0, cdim, 1) += (nabla_cost * kappa + cost * nabla_kappa);
-  }
-
-  //////////////////////////////////////////
-  // Try of curvature with discretized partial derivatives
-  Vector const qq (xi);
-  Vector nabla_curv (Vector::Zero (xidim));
-  Vector kk (Vector::Zero (nq));
-  for (size_t ii (0); ii < nq; ++ii) {
-    double x_m1;        // x_m1 is the entry x_(i-1) in xi
-    double y_m1;        // y_m1 is the entry y_(i-1) in xi
-    double x_i;
-    double y_i;
-    double x_p1;        // x_p1 is the entry x_(i+1) in xi
-    double y_p1;        // y_p1 is the entry y_(i+1) in xi
-
-    if (ii == 0) {
-      x_m1 = qs[0];
-      y_m1 = qs[1];
-      x_i = qq[((ii) * cdim)];
-      y_i = qq[((ii) * cdim) + 1];
-      x_p1 = qq[((ii + 1) * cdim)];
-      y_p1 = qq[((ii + 1) * cdim) + 1];
-    }
-
-    else if (ii == nq - 1) {
-      x_m1 = qq[((ii - 1) * cdim)];
-      y_m1 = qq[((ii - 1) * cdim) + 1];
-      x_i = qq[((ii) * cdim)];
-      y_i = qq[((ii) * cdim) + 1];
-      x_p1 = qe[0];
-      y_p1 = qe[1];
-    }
-
-    else {
-      x_m1 = qq[((ii - 1) * cdim)];
-      y_m1 = qq[((ii - 1) * cdim) + 1];
-      x_i = qq[((ii) * cdim)];
-      y_i = qq[((ii) * cdim) + 1];
-      x_p1 = qq[((ii + 1) * cdim)];
-      y_p1 = qq[((ii + 1) * cdim) + 1];
-    }
-
-    double const NN = x_p1*(y_m1-y_i) + x_i*(y_p1-y_m1) + x_m1*(y_i-y_m1);
-    double const DD = pow((x_m1 - x_p1), 2) + pow((y_m1 - y_p1), 2);
-    kk(ii) = 8 * NN / pow(DD, (3/2));           // this is kappa
-
-    double const dx_m1 = ((8 * (y_i-y_p1)) / pow(DD, (3/2))) - ((24 * (x_m1-x_p1) * NN) / pow(DD, (5/2)));
-    double const dx_i = ((8 * (y_p1-y_m1)) / pow(DD, (3/2)));
-    double const dx_p1 = ((8 * (y_m1-y_i)) / pow(DD, (3/2))) - ((24 * (x_p1-x_m1) * NN) / pow(DD, (5/2)));
-    double const dy_m1 = ((8 * (x_p1-x_i)) / pow(DD, (3/2))) - ((24 * (y_m1-y_p1) * NN) / pow(DD, (5/2)));
-    double const dy_i = ((8 * (x_m1-x_p1)) / pow(DD, (3/2)));
-    double const dy_p1 = ((8 * (x_i-x_m1)) / pow(DD, (3/2))) - ((24 * (y_m1-y_p1) * NN) / pow(DD, (5/2)));
-
-    Vector nabla_k (2);
-    nabla_k << dx_m1 + dx_i + dx_p1, dy_m1 + dy_i + dy_p1;
-
-    nabla_curv.block (ii * cdim, 0, cdim, 1) += 2 * kk(ii) * nabla_k;
-
-    //cout << endl << "kk" << endl << kk << endl;
-  }
-  //cout << endl << "nabla_curv" << endl << nabla_curv << endl;
-
-  Vector dxi (Ainv * (nabla_obs + lambda * nabla_smooth + omega * nabla_curv));
+  Vector dxi (Ainv * (nabla_obs + lambda * nabla_smooth + nu * nabla_curv));
   xi -= dxi / eta;
 
-  // computation of k_i for a 2D planar case
-  Vector k_i (Vector::Zero (nq));
-  for (size_t iq (0); iq < nq; ++iq) {
-      double const velx = velocity.block(iq * cdim, 0, 1, 1).norm();
-      double const vely = velocity.block((iq * cdim) + 1, 0, 1, 1).norm();
-      double const accx = acceleration.block((iq * cdim), 0, 1, 1).norm();
-      double const accy = acceleration.block((iq * cdim) + 1, 0, 1, 1).norm();
-
-      double numerator = velx * accy - vely * accx;
-      double denumerator = pow( pow(velx, 2) + pow(vely, 2), (3/2));
-      double const kk = numerator / denumerator;
-      k_i(iq) = kk;
-  }
-
-  //cout << endl << "k_i" << endl << k_i << endl;
-  //cout << endl << "velocity" << endl << velocity << endl;
-  cout << endl << "nabla_curvature" << endl << nabla_curvature << endl;
-
   curvature *= 150;         // for visualization the curvature vector is multiplied by a factor
-  //cout << endl << "curvature" << endl << curvature << endl;
-  //cout << endl << "jerk" << endl << jerk << endl;
-  //cout << endl << "kappa_l" << endl << kappa_l << endl;
+//  double const curv_sum (curv_strength.sum());
+  cout << endl << "nabla_curv" << endl << nabla_curv << endl;
 
   // end of "the" CHOMP iteration
   //////////////////////////////////////////////////
