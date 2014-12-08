@@ -97,8 +97,8 @@ endif (GTK2_FOUND)
 ##################################################
 # the files added here are in order of implementation!
 
-#add_executable (pp2d pp2d.cpp gfx.cpp)
-#target_link_libraries (pp2d ${GTK2_LIBRARIES})
+add_executable (pp2d pp2d.cpp gfx.cpp)
+target_link_libraries (pp2d ${GTK2_LIBRARIES})
 
 add_executable (pp2d_unitvecint pp2d_unitvecint.cpp gfx.cpp)
 target_link_libraries (pp2d_unitvecint ${GTK2_LIBRARIES})

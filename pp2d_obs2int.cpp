@@ -52,6 +52,9 @@
     to the other robot.
    21.10.14 pb
     Option implemented to set the trajectory of each robot to the respective starting point.
+   06.12.14
+    Added an output file which safes the gradient of U for comparison with pp2d_obs2int. File saved in
+    qtcreator-build directory.
 */
 //////////////////////////////////////////////////
 
@@ -62,6 +65,7 @@
 #include <stdlib.h>
 #include <sys/time.h>
 #include <err.h>
+#include <fstream>                      // for writing data in separate file
 
 typedef Eigen::VectorXd Vector;
 typedef Eigen::MatrixXd Matrix;
@@ -85,6 +89,7 @@ static double const dt (1.0);	       // time step
 static double const eta (100.0);    // >= 1, regularization factor for gradient descent
 static double const lambda (1.0);   // weight of smoothness objective
 static double const mu (0.4);       // weight of interference objective  -> 20.10.14: better performance (less oscillation) with mu < 1
+ofstream outFile("nablaU_obs2int.txt");  // open a new file for writing output data in
 
 //////////////////////////////////////////////////
 // gradient descent etc
@@ -260,6 +265,8 @@ static void init_chomp ()
   // cout << "AA\n" << AA
   //      << "\nAinv\n" << Ainv
   //      << "\nbb\n" << bb << "\n\n";
+
+  outFile << "nablaU_obs2int" << endl;       // output file is first time called and gets its title
 }
 
 
@@ -376,8 +383,17 @@ static void cb_idle ()
   }
 
   //// applying the update rule
-  Vector dxi (AARinv * (nabla_obs + lambda * nabla_smooth + mu * nabla_int));
+  Vector nabla_U (nabla_obs + lambda * nabla_smooth + mu * nabla_int);
+  double nabla_U_norm (nabla_U.norm());
+  Vector dxi (AARinv * nabla_U);
   xi -= dxi / eta;
+
+  // Read out the convergence of nabla_U data for plotting
+  if(!outFile.good()){
+     cerr << "An error with opening the file is occured!" << endl;
+  }
+
+  outFile << nabla_U_norm << endl;
 
   // end of "the" CHOMP iteration
   //////////////////////////////////////////////////

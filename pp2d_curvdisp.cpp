@@ -35,6 +35,9 @@
   28.10.14 pb
    Here I present the curvature vector graphically in the GUI. You can see
    how it grows with sharper curves.
+  08.12.14 pb
+   Added the averaged velocity which I implemented earlier in other files.
+   Therout the trajectory points do not drift anymore.
 */
 
 
@@ -267,11 +270,14 @@ static void cb_idle ()
   for (size_t iq (0); iq < nq; ++iq) {
     Vector const qq (xi.block (iq * cdim, 0, cdim, 1));
     Vector qd;
-    if (iq == nq - 1) {
-      qd = qe - xi.block (iq * cdim, 0, cdim, 1);
+    if (iq == 0) {
+        qd = (xi.block ((iq+1) * cdim, 0, cdim, 1) - qs) / (2*dt);
+    }
+    else if (iq == nq - 1) {
+      qd = (qe - xi.block ((iq-1) * cdim, 0, cdim, 1)) / (2*dt);
     }
     else {
-      qd = xi.block ((iq+1) * cdim, 0, cdim, 1) - xi.block (iq * cdim, 0, cdim, 1);
+      qd = (xi.block ((iq+1) * cdim, 0, cdim, 1) - xi.block ((iq-1) * cdim, 0, cdim, 1)) / (2*dt);
     }
 
     // In this case, C and W are the same, Jacobian is identity.  We

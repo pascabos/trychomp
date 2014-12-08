@@ -46,7 +46,12 @@
 
 //////////////////////////////////////////////////
 /* 21.10.14 pb
-   Test environment for further investigations.
+    Test environment for further investigations.
+   08.12.14 pb
+    Added an output file which safes the gradient of U for comparison with pp2d_obs2int. File saved in
+    qtcreator-build directory.
+   08.12.14 pb
+    Added the possibility that all trajecory points lie in the beginning at their starting point.
 */
 //////////////////////////////////////////////////
 
@@ -57,6 +62,7 @@
 #include <stdlib.h>
 #include <sys/time.h>
 #include <err.h>
+#include <fstream>                      // for writing data in separate file
 
 typedef Eigen::VectorXd Vector;
 typedef Eigen::MatrixXd Matrix;
@@ -80,6 +86,7 @@ static double const dt (1.0);	       // time step
 static double const eta (100.0);    // >= 1, regularization factor for gradient descent
 static double const lambda (1.0);   // weight of smoothness objective
 static double const mu (0.4);       // weight of interference objective  -> 20.10.14: better performance (less oscillation) with mu < 1
+ofstream outFile("nablaU_obs2int_wpapercostfct.txt");  // open a new file for writing output data in
 
 //////////////////////////////////////////////////
 // gradient descent etc
@@ -200,7 +207,17 @@ static void init_chomp ()
   qe2.resize (cdim);
   qe2 << -7.0, 7.0;     // 10.0, 7.0
 
-  repulsor.point_ << 3.0, 0.0;
+  xi = Vector::Zero (xidim);
+  for (size_t ii(0); ii < nq; ++ii) {       // comment this if you want the trajectories start at the coordinate origin (0,0).
+      if (ii < nq/2) {
+          xi.block (ii * cdim, 0, cdim, 1) = qs1;
+      }
+      else {
+          xi.block (ii * cdim, 0, cdim, 1) = qs2;
+      }
+  }
+
+  repulsor.point_ << 1.0, 2.5;
 
   // cout << "qs1\n" << qs1
   //      << "\nxi\n" << xi
@@ -246,6 +263,8 @@ static void init_chomp ()
   // cout << "AA\n" << AA
   //      << "\nAinv\n" << Ainv
   //      << "\nbb\n" << bb << "\n\n";
+
+  outFile << "nablaU_obs2int_wpapercostfct" << endl;       // output file is first time called and gets its title
 }
 
 
@@ -380,8 +399,17 @@ static void cb_idle ()
   }
 
   //// applying the update rule
-  Vector dxi (AARinv * (nabla_obs + lambda * nabla_smooth + mu * nabla_int));
+  Vector nabla_U (nabla_obs + lambda * nabla_smooth + mu * nabla_int);
+  double nabla_U_norm (nabla_U.norm());
+  Vector dxi (AARinv * nabla_U);
   xi -= dxi / eta;
+
+  // Read out the convergence of nabla_U data for plotting
+  if(!outFile.good()){
+     cerr << "An error with opening the file is occured!" << endl;
+  }
+
+  outFile << nabla_U_norm << endl;
 
   // end of "the" CHOMP iteration
   //////////////////////////////////////////////////
